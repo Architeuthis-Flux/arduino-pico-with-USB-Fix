@@ -40,7 +40,7 @@
 
 // Big, global USB mutex, shared with all USB devices to make sure we don't
 // have multiple cores updating the TUSB state in parallel
-mutex_t __usb_mutex;
+recursive_mutex_t __usb_mutex;
 
 // USB processing will be a periodic timer task
 #define USB_TASK_INTERVAL 1000
@@ -82,8 +82,6 @@ static int __usb_task_irq;
   /* Interface */\
   9, TUSB_DESC_INTERFACE, _itfnum, 0, 0, TUSB_CLASS_VENDOR_SPECIFIC, RESET_INTERFACE_SUBCLASS, RESET_INTERFACE_PROTOCOL, _stridx,
 
-
-int usb_hid_poll_interval __attribute__((weak)) = 10;
 
 const uint8_t *tud_descriptor_device_cb(void) {
     static tusb_desc_device_t usbd_desc_device = {
@@ -265,7 +263,7 @@ void __SetupUSBDescriptor() {
         uint8_t hid_itf = __USBInstallSerial ? 2 : 0;
         uint8_t hid_desc[TUD_HID_DESC_LEN] = {
             // Interface number, string index, protocol, report descriptor len, EP In & Out address, size & polling interval
-            TUD_HID_DESCRIPTOR(hid_itf, 0, HID_ITF_PROTOCOL_NONE, hid_report_len, EPNUM_HID, CFG_TUD_HID_EP_BUFSIZE, (uint8_t)usb_hid_poll_interval)
+            TUD_HID_DESCRIPTOR(hid_itf, 0, HID_ITF_PROTOCOL_NONE, hid_report_len, EPNUM_HID, CFG_TUD_HID_EP_BUFSIZE, 10)
         };
 
         uint8_t msd_itf = interface_count - 1;
@@ -362,9 +360,9 @@ static void usb_irq() {
     // if the mutex is already owned, then we are in user code
     // in this file which will do a tud_task itself, so we'll just do nothing
     // until the next tick; we won't starve
-    if (mutex_try_enter(&__usb_mutex, nullptr)) {
+    if (recursive_mutex_try_enter(&__usb_mutex, nullptr)) {
         tud_task();
-        mutex_exit(&__usb_mutex);
+        recursive_mutex_exit(&__usb_mutex);
     }
 }
 
@@ -384,7 +382,7 @@ void __USBStart() {
     __SetupDescHIDReport();
     __SetupUSBDescriptor();
 
-    mutex_init(&__usb_mutex);
+    recursive_mutex_init(&__usb_mutex);
 
     tusb_init();
 
@@ -393,18 +391,6 @@ void __USBStart() {
     irq_set_enabled(__usb_task_irq, true);
 
     add_alarm_in_us(USB_TASK_INTERVAL, timer_task, nullptr, true);
-}
-
-
-bool __USBHIDReady() {
-    uint32_t start = millis();
-    const uint32_t timeout = 500;
-
-    while (((millis() - start) < timeout) && tud_ready() && !tud_hid_ready()) {
-        tud_task();
-        delayMicroseconds(1);
-    }
-    return tud_hid_ready();
 }
 
 
